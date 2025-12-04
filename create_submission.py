@@ -3,6 +3,24 @@ import torch.nn as nn
 import pandas as pd
 import dill
 import yaml
+import numpy as np
+
+def gauge_map(A: torch.Tensor, b: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
+    """
+    A: m x n (constraint matrix)
+    b: m x 1 (constrant vector)
+    z: n x k (k input vectors from the unit cube in n dimensions)
+
+    Returns a n x k tensor, where the i^th column is the
+    gauge map of the i^th input vector.
+    """
+
+    def _compute_gauge(A, b, z):
+        return torch.max(torch.div(A@z, b),dim = 0).values
+    
+    gamma_dest = _compute_gauge(A, b, z)
+    gamma_start = torch.linalg.norm(z, ord = np.inf, dim=0)
+    return z @ torch.diag(gamma_start/gamma_dest)
 
 
 # simple net architecture
