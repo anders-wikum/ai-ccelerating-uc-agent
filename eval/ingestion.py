@@ -1,7 +1,7 @@
 # dir used
-input_dir = 'eval/test_data/'
-output_dir = 'submission/'
-submission_dir = 'submission/'
+input_dir = '/app/input_data/'
+output_dir = '/app/output/'
+submission_dir = '/app/ingested_program/'
 
 # Libraries for ingestion step
 import pandas as pd
@@ -12,7 +12,8 @@ import os
 
 def order_key(s):
     numb = s.split('_')
-    return int(numb[1])
+    ident = numb[1] + numb[2][-1] + numb[3]
+    return int(ident)
 
 def get_model():
     # Upload participant's model
@@ -25,7 +26,6 @@ def get_test_data():
  
     list_ins = sorted(os.listdir(input_dir),key=order_key)
     for index, instance in enumerate(list_ins):
-        # index = int(instance.split('_')[1])
         x_fea[index] = pd.read_excel(input_dir+instance+"/explanatory_variables.xlsx",sheet_name=None,index_col=0)
     return x_fea
 
@@ -40,6 +40,7 @@ def main():
     try:
         status = model.predict(features)
     except Exception as e:
+        print("HUH")
         print("Something went wrong: ",e)
         raise e
     duration = time.time() - start

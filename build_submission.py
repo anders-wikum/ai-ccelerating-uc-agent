@@ -77,15 +77,19 @@ import pandas as pd
 import dill
 import yaml
 import inspect
+import gzip
+import json
+import numpy as np
 
 # Class definitions from src/models (extracted automatically)
 {chr(10).join(class_defs)}
 
 # Wrapper class
 class model:
-    def __init__(self, model, generator_names):
+    def __init__(self, model, generators):
         self.model = model
-        self.generator_names = generator_names
+        self.generators = generators
+        self.generator_names = list(generators.keys())
 
     def transform_features(self, features):
         df_profiles = features["Profiles"]
@@ -109,8 +113,51 @@ class model:
             with torch.no_grad():
                 self.model.eval()
                 pred = self.model(x)
-            status[instance_index] = self.transform_predictions(pred)
+            status[instance_index] = self.repair_feasibility(features[instance_index], self.transform_predictions(pred))
         return status
+
+    def repair_feasibility(self, features, status_df) -> pd.DataFrame:
+        repaired_df = status_df.copy()
+        df_init_conditions = features["Initial_Conditions"]
+        initial_of_gen = dict(zip(df_init_conditions.index, df_init_conditions["initial_status"].values))
+        for gen_name, (min_down, min_up) in self.generators.items():
+            status = status_df[gen_name].values.copy().astype(int)
+            init_status = int(initial_of_gen[gen_name])
+            min_down = int(min_down)
+            min_up = max(2, int(min_up))
+            # print(gen_name, min_down, min_up, init_status)
+            # Handle initial status constraint
+            if init_status > 0:
+                # Must stay ON for remaining up time
+                remaining = max(0, min_up - init_status)
+                status[:remaining] = 1
+                current_state = 1
+                time_in_state = init_status + remaining
+            elif init_status < 0:
+                # Must stay OFF for remaining down time
+                remaining = max(0, min_down - abs(init_status))
+                status[:remaining] = 0
+                current_state = 0
+                time_in_state = abs(init_status) + remaining
+            
+            # Process from the point after initial constraint
+            start_idx = remaining
+            for i in range(start_idx, len(status)):
+                window_length = min_up if current_state == 1 else min_down
+
+                if time_in_state < window_length:
+                    time_in_state += 1
+                else:
+                    lookahead_window = status[i:min(i + window_length, len(status))]
+                    if np.sum(lookahead_window == current_state) >= np.sum(lookahead_window != current_state):
+                        time_in_state += 1
+                    else:
+                        current_state = abs(current_state - 1)
+                        time_in_state = 1
+                status[i] = current_state
+
+            repaired_df[gen_name] = status
+        return repaired_df
 
 def main():
     results_path = "{results_path}"
@@ -131,12 +178,19 @@ def main():
     model_inst = {sources['classes'][0]}(**init_params)
     model_inst.load_state_dict(torch.load(f"{{results_path}}/simple_mlp_state.pt"))
     
+    with gzip.open("data/Train_Data/instance_2021_Q1_1/InputData.json.gz", 'r') as f:
+        in_json = f.read().decode("utf-8")
+        data = json.loads(in_json)
+
     gen_names = pd.read_excel("data/Train_Data/instance_2021_Q1_1/Response_Variables.xlsx").columns[1:].tolist()
-    wrapped = model(model=model_inst, generator_names=gen_names)
+    generators = {{
+        key:(value["Minimum downtime (h)"], value["Minimum uptime (h)"])
+        for key, value in data['Generators'].items() if key in gen_names
+    }}
+    wrapped = model(model=model_inst, generators=generators)
     
     with open("submission/model.dill", "wb") as f:
         dill.dump(wrapped, f, recurse=True)
-    print("Done!")
 
 if __name__ == "__main__":
     main()
@@ -150,6 +204,6 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--results", required=True)
-    parser.add_argument("--output", default="create_submission_test.py")
+    parser.add_argument("--output", default="create_submission.py")
     args = parser.parse_args()
     build_submission(args.results, args.output)
